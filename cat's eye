@@ -1,0 +1,74 @@
+int LEDG = D0;
+int LEDR = D2;
+int LEDY = D4;
+int LEDB = D6;
+
+int flagR = 0;
+int flagW = 0;
+
+void MeshLED(const char *event, const char *data) {
+    int Signal = atoi(data);
+    Serial.printlnf("received!");
+    int road = Signal / 10;
+    flagR = road;
+    int weather = Signal % 10;
+    flagW = weather;
+    Serial.printlnf("flagR is %d, flagW is %d", flagR, flagW);
+}
+
+void setup() {
+    pinMode(LEDG, OUTPUT);
+    pinMode(LEDR, OUTPUT);
+    pinMode(LEDY, OUTPUT);
+    pinMode(LEDB, OUTPUT);
+    Mesh.subscribe("congestion", MeshLED);
+    Serial.begin(9600);
+}
+
+void loop() {
+    if (flagW == 1)
+        digitalWrite(LEDB, LOW);
+    else
+        digitalWrite(LEDB, HIGH);
+        
+    if (flagR == 0) //smooth
+    {  
+        digitalWrite(LEDG, HIGH);
+        digitalWrite(LEDR, LOW);
+        digitalWrite(LEDY, LOW);
+    }
+    else if (flagR == 5) //congested
+    {  
+        digitalWrite(LEDG, LOW);
+        digitalWrite(LEDR, HIGH);
+        digitalWrite(LEDY, LOW);
+    }
+    else //congestion possible
+    { 
+        digitalWrite(LEDG, LOW);
+        digitalWrite(LEDR, LOW);
+        if (flagR == 1) 
+        {
+            digitalWrite(LEDY, HIGH);
+            delay(2000);
+            digitalWrite(LEDY, LOW);
+            delay(2000);
+        }
+        else if (flagR == 2) 
+        {
+            digitalWrite(LEDY, HIGH);
+            delay(1000);
+            digitalWrite(LEDY, LOW);
+            delay(1000);
+        }
+        else if (flagR == 3) 
+        {
+            digitalWrite(LEDY, HIGH);
+            delay(500);
+            digitalWrite(LEDY, LOW);
+            delay(500);
+        }
+        else 
+            digitalWrite(LEDY, HIGH);
+    }
+}
