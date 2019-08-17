@@ -1,0 +1,71 @@
+#define Trig1 D10 
+#define Echo1 D9 
+
+int sys_lane = 0;
+float sys_width = 0;
+
+
+float get_distance(int Trig, int Echo) {
+    float Time = 0;
+    float Dist = 0;
+    digitalWrite(Trig, LOW);
+    delay(1);
+    digitalWrite(Trig, HIGH);
+    delay(1);   
+    digitalWrite(Trig, LOW);
+    Time = pulseIn(Echo, HIGH);
+    Time = Time / 1000 / 1000;        
+    Dist = Time * 340 / 2;
+    Dist *= 100;
+    return Dist;
+}
+
+int Judge(float distance, int lane, float width) 
+{
+    int state = 0;
+    for (int i = 1; i <= lane; i ++)
+    {
+        float lower = width * (i - 1);
+        float upper = width * i;
+        if ((distance < upper) && (distance > lower))
+            state = i;
+    }
+    return state;
+}
+
+void Detect(const char *event, const char *data) {
+    int Sign = atoi(data);
+    float Dist = get_distance(Trig1, Echo1);
+    int state = Judge(Dist, sys_lane, sys_width);
+    int message = state * 10 + Sign;
+    Mesh.publish("getResult", String(message));
+}
+
+void Para_Preset(const char *event, const char *data) {
+    float MES = atof(data);
+    sys_lane = MES / 100;
+    sys_width = MES - (sys_lane * 100);
+    Serial.printlnf("lane is %d, width is %.2f", sys_lane, sys_width);
+    Serial.printlnf("lane set ok!");
+    int setok = 1;
+    Particle.publish("SetOkGWsub", String(setok), PRIVATE);
+}
+
+void Para_Reset(const char *event, const char *data) {
+    sys_lane = 0;
+    sys_width = 0;
+    Serial.printlnf("parameter reset!");
+}
+
+void setup() {
+    Serial.begin(9600);
+    pinMode(Trig1, OUTPUT);
+    pinMode(Echo1, INPUT);
+    Mesh.subscribe("detect", Detect);
+    Particle.subscribe("RoadPara", Para_Preset, MY_DEVICES);
+    Particle.subscribe("ParameterReset", Para_Reset, MY_DEVICES);
+}
+
+
+void loop() { 
+}
