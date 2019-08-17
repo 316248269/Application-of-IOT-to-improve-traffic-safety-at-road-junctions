@@ -1,0 +1,648 @@
+// This #include statement was automatically added by the Particle IDE.
+#include <Adafruit_BME280_RK.h>
+Adafruit_BME280 bme; // I2C
+const char *FIELD_SEPARATOR = "|";
+char buf_climate[1024];
+char buf_road[1024];
+
+#define Trig1 D11 
+#define Echo1 D12 
+#define Trig2 D6 
+#define Echo2 D8  
+#define Trig3 D4 
+#define Echo3 D5 
+#define Trig4 D2 
+#define Echo4 D3 
+#define Trig5 D9 
+#define Echo5 D10 
+// #define Trig6 D7 
+// #define Echo6 D13 
+
+
+int count = 0;  
+bool c_flag = false; // count the number of sensor detect signal simulatenously
+bool veh_flag = false; // vehicle pass flag
+bool speed_flag = false; // calculate speed
+bool inter_flag = false; // calculate interval distance
+float speed = 0;
+float intervalD = 0;
+unsigned long entertime = 0;
+unsigned long leftime = 0;
+int NumDetect;
+int sensor[4] = {0, 0, 0, 0};
+int resensor[4] = {0, 0, 0, 0};
+
+bool sensorReady = false;
+unsigned long lastPublish = 0;
+
+unsigned long TimeRecord = 0;
+int cong_flag = 0;
+int specialsensor[5] = {0, 0, 0, 0, 0};
+
+int sys_lane = 0;
+float sys_width = 0;
+
+void MeshP(const char *event, const char *data) {
+    Serial.printlnf("shine");
+    Mesh.publish(event, data);
+    int Signal = atoi(data);
+    Serial.printlnf("data is %d", Signal);
+}
+
+void Para_Preset(const char *event, const char *data) {
+    float MES = atof(data);
+    sys_lane = MES / 100;
+    sys_width = MES - (sys_lane * 100);
+    Serial.printlnf("lane is %d, width is %.2f", sys_lane, sys_width);
+    Serial.printlnf("lane set ok!");
+}
+
+void Para_Reset(const char *event, const char *data) {
+    sys_lane = 0;
+    sys_width = 0;
+    Serial.printlnf("parameter reset!");
+    int setok = 1;
+    Particle.publish("SetOkGW", String(setok), PRIVATE);
+}
+
+void Sensor(const char *event, const char *data)
+{
+    Serial.printlnf("enter check");
+    float DistA = get_distance(Trig1, Echo1);
+    float DistB = get_distance(Trig2, Echo2);
+    float DistC = get_distance(Trig3, Echo3);
+    float DistD = get_distance(Trig4, Echo4);
+    float DistE = get_distance(Trig5, Echo5);
+    int DA = Judge(DistA, sys_lane, sys_width);
+    int DB = Judge(DistB, sys_lane, sys_width);
+    int DC = Judge(DistC, sys_lane, sys_width);
+    int DD = Judge(DistD, sys_lane, sys_width);
+    int DE = Judge(DistE, sys_lane, sys_width);
+    int ReSen = resensor[0];
+    Mesh.publish("detect", String(0));
+    int S = resensor[0];
+    resensor[0] = ReSen;
+    Serial.printlnf("detected");
+    int SignalT = DA + DB * 10 + DC * 100 + DD * 1000 + DE * 10000 + S * 100000;
+    int flag = atoi(data);
+    Serial.printlnf("flag is %d", flag);
+    if (flag == 1) {
+        Serial.printlnf("SignalT is %d", SignalT);
+        int fednum = 0;
+        if (SignalT != 0)
+            fednum = 1;
+        else
+            fednum = 2;
+        Particle.publish("doublecheck", String(fednum), PRIVATE);
+    }
+    if (flag == 2)
+        Particle.publish("Signal", String(SignalT), PRIVATE);
+}
+
+void GetRes(const char *event, const char *data) {
+    int message = atoi(data);
+    int num = message % 10;
+    int STATE = message / 10;
+    resensor[num] = STATE;
+}
+
+void setup() 
+{
+    Serial.begin(9600);
+    sensorReady = bme.begin(0x76);
+    pinMode(Trig1, OUTPUT);
+    pinMode(Echo1, INPUT);
+    pinMode(Trig2, OUTPUT);
+    pinMode(Echo2, INPUT);
+    pinMode(Trig3, OUTPUT);
+    pinMode(Echo3, INPUT);
+    pinMode(Trig4, OUTPUT);
+    pinMode(Echo4, INPUT);
+    pinMode(Trig5, OUTPUT);
+    pinMode(Echo5, INPUT);
+    Particle.subscribe("congestion", MeshP, MY_DEVICES);
+    Particle.subscribe("RoadPara", Para_Preset, MY_DEVICES);
+    Particle.subscribe("ParameterReset", Para_Reset, MY_DEVICES);
+    Particle.subscribe("check", Sensor, MY_DEVICES);
+    Mesh.subscribe("getResult", GetRes);
+}
+
+
+void loop()
+{
+    if ((sys_lane != 0) && (sys_width != 0)) 
+    {
+        climate_measure();
+        bool Enter_Flag = count_veh();
+        special_congestion(Enter_Flag);
+    }    
+}
+
+
+void special_congestion(bool flag) {
+    if (flag == true) {
+        if (cong_flag == 0) {
+            TimeRecord = millis();
+            cong_flag = 1;
+        }
+        if (cong_flag == 1) {
+            unsigned long current = millis();
+            unsigned long TimeCost = current - TimeRecord;
+            if (TimeCost > 2000) {
+                TimeRecord = millis();
+                float Dist1 = get_distance(Trig1, Echo1);
+                float Dist2 = get_distance(Trig2, Echo2);
+                float Dist3 = get_distance(Trig3, Echo3);
+                float Dist4 = get_distance(Trig4, Echo4);
+                float Dist5 = get_distance(Trig5, Echo5);
+                specialsensor[0] = Judge(Dist1, sys_lane, sys_width);
+                specialsensor[1] = Judge(Dist2, sys_lane, sys_width);
+                specialsensor[2] = Judge(Dist3, sys_lane, sys_width);
+                specialsensor[3] = Judge(Dist4, sys_lane, sys_width);
+                specialsensor[4] = Judge(Dist5, sys_lane, sys_width);
+                int flag = 0;
+                for (int i = 0; i < 5; i ++) {
+                    if (specialsensor[i] != 0)
+                        flag = 1;    
+                }
+                if (flag == 1)
+                    cong_flag = 2;
+                else {
+                    cong_flag = 0;
+                    c_flag = false;
+                    Serial.printlnf("sepcial again 1");
+                }
+            }
+        }
+        if (cong_flag == 2)
+        {
+            unsigned long current = millis();
+            unsigned long TimeCost = current - TimeRecord;
+            if (TimeCost > 2000) {
+                TimeRecord = millis();
+                float Dist1 = get_distance(Trig1, Echo1);
+                float Dist2 = get_distance(Trig2, Echo2);
+                float Dist3 = get_distance(Trig3, Echo3);
+                float Dist4 = get_distance(Trig4, Echo4);
+                float Dist5 = get_distance(Trig5, Echo5);
+                int m_sensor[5] = {0, 0, 0, 0, 0};
+                m_sensor[0] = Judge(Dist1, sys_lane, sys_width);
+                m_sensor[1] = Judge(Dist1, sys_lane, sys_width);
+                m_sensor[2] = Judge(Dist1, sys_lane, sys_width);
+                m_sensor[3] = Judge(Dist1, sys_lane, sys_width);
+                m_sensor[4] = Judge(Dist1, sys_lane, sys_width);
+                int mflag = 0;
+                for (int i = 0; i < 5; i ++) 
+                {
+                    if (m_sensor[i] != 0) 
+                        mflag = 1;
+                    if (m_sensor[i] != specialsensor[i])
+                        TimeCost = 0;
+                }
+                if (mflag == 1) 
+                {
+                    if (TimeCost == 0) {
+                        for (int i = 0; i < 5; i ++) 
+                            specialsensor[i] = m_sensor[i];
+                    }
+                    else {
+                        Particle.publish("Congested", String(1), PRIVATE);
+                        cong_flag = 0; // congested
+                        c_flag = false;
+                        Serial.printlnf("special congestion again");
+                    }
+                }
+                else {
+                    cong_flag = 0;
+                    c_flag = false;
+                    Serial.printlnf("sepcial again 2");
+                }
+            }
+        }
+    }
+    else 
+        cong_flag = 0;
+}
+
+void climate_measure() 
+{
+    char buf_temp[64];
+    char buf_pres[64];
+    char buf_humi[64];
+    const unsigned long PUBLISH_PERIOD_MS = 20000;
+    if (millis() - lastPublish >= PUBLISH_PERIOD_MS && sensorReady) 
+    {
+        lastPublish = millis();
+
+        float temp = bme.readTemperature(); // degrees C
+        float humidity = bme.readHumidity(); // % 
+        float pressure = bme.readPressure() / 100.0; // hPa
+        snprintf(buf_climate, sizeof(buf_climate), "%.2f %s %.2f %s %.2f", temp, FIELD_SEPARATOR, humidity, FIELD_SEPARATOR, pressure);
+        Particle.publish("CLIMATE", buf_climate, PRIVATE);
+    }
+}
+
+float get_distance(int Trig, int Echo) 
+{
+    float Time = 0;
+    float Dist = 0;
+    digitalWrite(Trig, LOW);
+    delay(1);
+    digitalWrite(Trig, HIGH);
+    delay(1);   
+    digitalWrite(Trig, LOW);
+    Time = pulseIn(Echo, HIGH);
+    Time = Time / 1000 / 1000;        
+    Dist = Time * 340 / 2;
+    Dist *= 100;
+    return Dist;
+}
+
+int Judge(float distance, int lane, float width) 
+{
+    int state = 0;
+    for (int i = 1; i <= lane; i ++)
+    {
+        float lower = width * (i - 1);
+        float upper = width * i;
+        if ((distance < upper) && (distance > lower))
+            state = i;
+    }
+    return state;
+}
+
+bool count_veh() 
+{
+    
+    float Dist1 = get_distance(Trig1, Echo1);
+    float Dist2 = get_distance(Trig2, Echo2);
+    float Dist3 = get_distance(Trig3, Echo3);
+    float Dist4 = get_distance(Trig4, Echo4);
+    float Dist5 = get_distance(Trig5, Echo5);
+    
+    int Detect[5];
+    Detect[0] = Judge(Dist1, sys_lane, sys_width);
+    Detect[1] = Judge(Dist2, sys_lane, sys_width);
+    Detect[2] = Judge(Dist3, sys_lane, sys_width);
+    Detect[3] = Judge(Dist4, sys_lane, sys_width);
+    Detect[4] = Judge(Dist5, sys_lane, sys_width);
+    // Serial.printlnf("%.2f[%d], %.2f[%d], %.2f[%d], %.2f[%d], %.2f[%d]", Dist1, Detect[0], Dist2, Detect[1], Dist3, Detect[2], Dist4, Detect[3], Dist5, Detect[4]);
+    // delay(1000);
+    if (veh_flag == false) 
+    {
+        if (c_flag == false) 
+        {
+            if ((Detect[0] != 0) && (Detect[1] != 0))
+            {
+                Serial.printlnf("1");
+                c_flag = true; // vehicle driving in sensor region
+                entertime = millis(); //record vehicle enter time
+                if (inter_flag == true) //meaningful for the first vehicle entering
+                {
+                    unsigned long intervalT = entertime - leftime; // time interval
+                    //since last vehicle enter sensor reigon entirely to this vehicle begin to enter the reigon
+                    intervalD = ((float)intervalT * speed) / 1000 - 20; //maybe minus 20mm in simulation
+                    if (intervalD < 0) {
+                        c_flag = false;
+                        Serial.printlnf("distance < 0, again");
+                    }
+                    else
+                        inter_flag = false;
+                }
+                // float dist = get_distance(Trig6, Echo6);
+                Mesh.publish("detect", String(0));
+            }
+        }
+        else
+        {
+            if (NumDetect == 0) 
+            {
+                // Serial.printlnf("d0: %d, d1:%d, d2:%d, d3:%d, d4:%d, s1:%d, s2:%d, s3:%d, s4:%d", Detect[0], Detect[1], Detect[2], Detect[3], Detect[4], resensor[0], resensor[1], resensor[2], resensor[3]);
+                if ((Detect[2] != 0) && (resensor[1] == 0)) {
+                    Serial.printlnf("2.1");
+                    Mesh.publish("detect", String(1));
+                }
+                else if ((Detect[3] != 0) && (resensor[2] == 0)) {
+                    Mesh.publish("detect", String(2));
+                    Serial.printlnf("2.2");
+                }
+                else if ((Detect[4] != 0) && (resensor[3] == 0)) {
+                    Mesh.publish("detect", String(3));
+                    Serial.printlnf("2.3");
+                }
+            }
+            if ((Detect[0] == 0) && (NumDetect == 0)) 
+            {
+                Serial.printlnf("4");
+                // Serial.printlnf("d1:%d, d2:%d, d3:%d, d4:%d, s1:%d, s2:%d, s3:%d, s4:%d", Detect[1], Detect[2], Detect[3], Detect[4], resensor[0], resensor[1], resensor[2], resensor[3]);
+                leftime = millis();
+                unsigned long current = millis();
+                unsigned long check = current - leftime;
+                if (check > 4000) 
+                {
+                    Serial.printlnf("again3");
+                    c_flag = false;
+                    
+                }
+                for (int i = 4; i >  0; i --) 
+                {
+                    if (Detect[i] != 0) 
+                    {
+                        NumDetect = i;
+                        break;
+                    }
+                }
+                if (NumDetect != 0)
+                {
+                    for (int j = 0; j < NumDetect; j ++) 
+                        sensor[j] = Detect[j + 1];
+                    
+                    int temp[4] = {0, 0, 0, 0};
+                    for (int i = 0; i < NumDetect; i ++)
+                        temp[i] = resensor[i];
+                    for (int j = 0; j < NumDetect; j ++)
+                        resensor[j] = temp[NumDetect-1-j];
+                }
+            }
+            if (Detect[2] != 0 && speed_flag == false) 
+            {
+                Serial.printlnf("5");
+                unsigned long passtime = millis();
+                unsigned long interval = passtime - entertime;
+                speed = 10000 / (float) interval;
+                speed_flag = true;
+            }
+            if ((NumDetect != 0) && (speed_flag == true)) 
+            {
+                Serial.printlnf("6");
+                veh_flag = true;
+                inter_flag = true;
+                c_flag = false;
+                speed_flag = false;
+            }
+        }
+    }
+    else 
+    {
+        veh_flag = false;
+        int num_veh = 0;
+        Serial.printlnf("************************************************");
+        Serial.printlnf("num detect is %d", NumDetect);
+        Serial.printlnf("d1:%d, d2:%d, d3:%d, d4:%d, s1:%d, s2:%d, s3:%d, s4:%d", sensor[0], sensor[1], sensor[2], sensor[3], resensor[0], resensor[1], resensor[2], resensor[3]);
+        if (sys_lane == 1)
+            num_veh = Singlane(NumDetect);
+        else if (sys_lane == 2)
+            num_veh = Doublane(sensor[0], sensor[1], sensor[2], sensor[3], resensor[0], resensor[1], resensor[2], resensor[3]);
+        else if (sys_lane == 3)
+            num_veh = Triplane(sensor[0], sensor[1], sensor[2], sensor[3], resensor[0], resensor[1], resensor[2], resensor[3]);
+        else if (sys_lane == 4)
+            num_veh = Quadlane(sensor[0], sensor[1], sensor[2], sensor[3], resensor[0], resensor[1], resensor[2], resensor[3]);
+        
+        
+        Serial.printlnf("The interval is %.2fmm", intervalD);
+        Serial.printlnf("speed is %.2fmm/s", speed);
+        Serial.printlnf("%d vehicle pass", num_veh);
+        Serial.printlnf("************************************************");
+        snprintf(buf_road, sizeof(buf_road), "%.2f %s %.2f %s %d", intervalD, FIELD_SEPARATOR, speed, FIELD_SEPARATOR, num_veh);
+        Particle.publish("ROAD", String(buf_road), PRIVATE);
+        
+        NumDetect = 0;
+        sensor[0] = 0, sensor[1] = 0, sensor[2] = 0, sensor[3] = 0;
+        resensor[0] = 0, resensor[1] = 0, resensor[2] = 0, resensor[3] = 0;
+    }
+    return c_flag;
+}
+
+int veh_type(int num, int flag)
+{
+    int Num_Veh = 0;
+    int Num_miCar = 0; // 3.2m
+    int Num_Car = 0;   // 4.2-4.8m
+    int Num_Suv = 0;   // 5.1-5.6m, suv or pickup
+    int Num_Bus = 0;  // >8m bus or truck
+    if (num == 1)
+        Num_miCar = 1;
+    else if (num == 2)
+        Num_Car = 1;
+    else if (num == 3)
+        Num_Suv = 1;
+    else if (num == 4)
+        Num_Bus = 1;
+    Num_Veh = Num_miCar + Num_Car * 10 + Num_Suv * 100 + Num_Bus * 1000;
+    Serial.printlnf("num: %d, micar: %d, car: %d, suv: %d, bus: %d, flag: %d", num, Num_miCar, Num_Car, Num_Suv, Num_Bus, flag);
+    return Num_Veh;
+}
+
+int Singlane(int num)
+{
+    int Num_Veh = veh_type(num, 3);
+    return Num_Veh;
+}
+
+int Doublane(int d1, int d2, int d3, int d4, int s1, int s2, int s3, int s4) 
+{
+    int Num_Veh = 0;
+    int D[4], S[4];
+    D[0] = d1; D[1] = d2; D[2] = d3; D[3] = d4;
+    S[0] = s1; S[1] = s2; S[2] = s3; S[3] = s4;
+    int D_N = 0;
+    int S_N = 0;
+    for (int i = 0; i < 4; i ++)
+    {
+        if (D[i] == 1)
+            D_N += 1;
+        if (S[i] == 1)
+            S_N += 1;
+    }
+    if (D_N != 0)
+        Num_Veh += veh_type(D_N, 1);
+    if (S_N != 0)
+        Num_Veh += veh_type(S_N, 2);
+    return Num_Veh;
+}
+
+int Triplane(int d1, int d2, int d3, int d4, int s1, int s2, int s3, int s4)
+{
+    int Num_Veh = 0;
+    int D[4], S[4];
+    D[0] = d1; D[1] = d2; D[2] = d3; D[3] = d4;
+    S[0] = s1; S[1] = s2; S[2] = s3; S[3] = s4;
+    int D_F = 0, D_M = 0, D_S = 0;
+    int S_F = 0, S_M = 0, S_S = 0;
+    for (int i = 0; i < 3; i ++) 
+    {
+        if (D[i] == 1)
+            D_F += 1;
+        else if (D[i] == 2)
+            D_M += 1;
+        else if (D[i] == 3)
+            D_S += 1;
+    }
+    for (int i = 0; i < 3; i ++) 
+    {
+        if (S[i] == 3)
+            S_F += 1;
+        else if (S[i] == 2)
+            S_M += 1;
+        else if (S[i] == 1)
+            S_S += 1;
+    }
+    // Serial.printlnf("D_F:%d, D_M:%d, D_S:%d, S_F:%d, S_M:%d, S_S:%d", D_F, S_M, D_S, S_F, S_M, S_S);
+    if (D_F != 0)
+        Num_Veh += veh_type(D_F, 1);
+    if (S_S != 0)
+        Num_Veh += veh_type(S_S, 2);
+        
+    if ((D_F == 0) && (D_M != 0))
+        Num_Veh += veh_type(D_M, 3);
+    else if ((S_S == 0) && (S_M != 0))
+        Num_Veh += veh_type(S_M, 4);
+    
+    if ((S_S != 0) && (D_F != 0) && ((S_M !=0) || (D_M != 0)))
+        Num_Veh += midlanecase(D[0], D[1], D[2], D[3], S[0], S[1], S[2], S[3], D_M, S_M, 5);
+    return Num_Veh;
+}
+
+int Quadlane(int d1, int d2, int d3, int d4, int s1, int s2, int s3, int s4)
+{
+    int Num_Veh = 0;
+    int D[4], S[4];
+    D[0] = d1; D[1] = d2; D[2] = d3; D[3] = d4;
+    S[0] = s1; S[1] = s2; S[2] = s3; S[3] = s4;
+    int D_1 = 0, D_2 = 0, D_3 = 0, D_4 = 0;
+    int S_1 = 0, S_2 = 0, S_3 = 0, S_4 = 0;
+    for (int i = 0; i < 4; i ++) 
+    {
+        if (D[i] == 1)
+            D_1 += 1;
+        else if (D[i] == 2)
+            D_2 += 1;
+        else if (D[i] == 3)
+            D_3 += 1;
+        else if (D[i] == 4)
+            D_4 += 1;
+    }
+    for (int i = 0; i < 4; i ++) 
+    {
+        if (S[i] == 4)
+            S_1 += 1;
+        else if (S[i] == 3)
+            S_2 += 1;
+        else if (S[i] == 2)
+            S_3 += 1;
+        else if (S[i] == 1)
+            S_4 += 1;
+    }
+    if (D_1 != 0)
+    {
+        Num_Veh += veh_type(D_1, 1);
+        if (S_4 == 0) 
+        {
+            if (S_3 != 0)
+            {
+                Num_Veh += veh_type(S_3, 2);
+                Num_Veh += midlanecase(D[0], D[1], D[2], D[3], S[0], S[1], S[2], S[3], D_2, S_2, 2);
+            }
+            else 
+            {
+                if (S_2 != 0)
+                    Num_Veh += veh_type(S_2, 3);
+            }
+        }
+        else //have to estimate
+        {
+            if ((D_2 != 0) || (S_2 != 0))
+                Num_Veh += midlanecase(D[0], D[1], D[2], D[3], S[0], S[1], S[2], S[3], D_2, S_2, 2);
+            if ((D_3 != 0) || (S_3 != 0))
+                Num_Veh += midlanecase(D[0], D[1], D[2], D[3], S[0], S[1], S[2], S[3], D_2, S_2, 3);
+        }
+    }
+    else if (D_2 != 0)
+    {
+        Num_Veh += veh_type(D_2, 6);
+        if (S_4 == 0)
+        {
+            if (S_3 != 0)
+                Num_Veh += veh_type(S_3, 7);
+        }
+        else
+        {
+            if ((D_3 != 0) || (S_3 != 0))
+                Num_Veh += midlanecase(D[0], D[1], D[2], D[3], S[0], S[1], S[2], S[3], D_3, S_3, 3);
+        }
+    }
+    else if (D_3 != 0)
+        Num_Veh += veh_type(D_3, 9);
+    if (S_4 != 0)
+        Num_Veh += veh_type(S_4, 10);
+    
+    return Num_Veh; 
+}
+
+int midlanecase(int d1, int d2, int d3, int d4, int s1, int s2, int s3, int s4, int D_mid, int S_mid, int midlane)
+{
+    int D[4] = {d1, d2, d3, d4};
+    int S[4] = {s1, s2, s3, s4};
+    int Num_Veh = 0;
+    int num_same = 0;
+    if ((D_mid != 0) && (S_mid == 0))
+        Num_Veh += veh_type(D_mid, 41);
+    else if ((D_mid == 0) && (S_mid != 0))
+        Num_Veh += veh_type(S_mid, 42);
+    else if ((D_mid != 0) && (S_mid != 0))
+    {
+        for (int i = 0; i < 4; i ++)
+        {
+            if ((D[i] == S[i]) && (D[i] == midlane) && (S[i] == midlane))
+                num_same += 1;
+        }
+        if (num_same == 0)
+        {
+            int maxD = 0, minD = 0, maxS = 0, minS = 0;
+            for (int i = 3; i >= 0; i --)
+            {
+                if (D[i] != 0) 
+                {
+                    maxD = i;
+                    break;
+                }
+            }
+            for (int i = 3; i >= 0; i --)
+            {
+                if (S[i] != 0) 
+                {
+                    maxS = i;
+                    break;
+                }
+            }
+            for (int i = 0; i <= 3; i ++)
+            {
+                if (D[i] != 0) 
+                {
+                    minD = i;
+                    break;
+                }
+            }
+            for (int i = 0; i <= 3; i ++)
+            {
+                if (S[i] != 0) 
+                {
+                    minS = i;
+                    break;
+                }
+            }
+            int maxP = max(maxD, maxS);
+            int minP = min(minD, minS);
+            int diff = maxP - minP + 1;
+            Num_Veh += veh_type(diff, 43);
+        }
+        else
+        {
+            if ((num_same == D_mid) || (num_same == S_mid))
+                Num_Veh += veh_type(max(D_mid, S_mid), 44);
+            else if ((num_same != D_mid) && (num_same != S_mid))
+                Num_Veh += veh_type((D_mid + S_mid - num_same), 45);
+        }
+    }
+    return Num_Veh;
+}
