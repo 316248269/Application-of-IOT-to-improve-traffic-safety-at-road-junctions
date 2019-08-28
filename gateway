@@ -15,8 +15,6 @@ char buf_road[1024];
 #define Echo4 D3 
 #define Trig5 D9 
 #define Echo5 D10 
-// #define Trig6 D7 
-// #define Echo6 D13 
 
 
 int count = 0;  
@@ -31,6 +29,7 @@ unsigned long leftime = 0;
 int NumDetect;
 int sensor[4] = {0, 0, 0, 0};
 int resensor[4] = {0, 0, 0, 0};
+float DistS = 0;
 
 bool sensorReady = false;
 unsigned long lastPublish = 0;
@@ -55,14 +54,14 @@ void Para_Preset(const char *event, const char *data) {
     sys_width = MES - (sys_lane * 100);
     Serial.printlnf("lane is %d, width is %.2f", sys_lane, sys_width);
     Serial.printlnf("lane set ok!");
+    int setok = 1;
+    Particle.publish("SetOkGW", String(setok), PRIVATE);
 }
 
 void Para_Reset(const char *event, const char *data) {
     sys_lane = 0;
     sys_width = 0;
     Serial.printlnf("parameter reset!");
-    int setok = 1;
-    Particle.publish("SetOkGW", String(setok), PRIVATE);
 }
 
 void Sensor(const char *event, const char *data)
@@ -78,32 +77,35 @@ void Sensor(const char *event, const char *data)
     int DC = Judge(DistC, sys_lane, sys_width);
     int DD = Judge(DistD, sys_lane, sys_width);
     int DE = Judge(DistE, sys_lane, sys_width);
-    int ReSen = resensor[0];
-    Mesh.publish("detect", String(0));
-    int S = resensor[0];
-    resensor[0] = ReSen;
-    Serial.printlnf("detected");
-    int SignalT = DA + DB * 10 + DC * 100 + DD * 1000 + DE * 10000 + S * 100000;
+    Mesh.publish("detect", String(8)); // get DistS
+    int DS = Judge(DistS, sys_lane, sys_width);
+        
     int flag = atoi(data);
-    Serial.printlnf("flag is %d", flag);
-    if (flag == 1) {
-        Serial.printlnf("SignalT is %d", SignalT);
-        int fednum = 0;
-        if (SignalT != 0)
-            fednum = 1;
+    if (flag == 1)
+    {
+        Mesh.publish("detect", String(8));
+        int SignalT = 0;
+        if ((DA == 0) && (DB == 0) && (DC == 0) && (DD == 0) && (DE == 0) && (DS == 0))
+            SignalT = 2;
         else
-            fednum = 2;
-        Particle.publish("doublecheck", String(fednum), PRIVATE);
+            SignalT = 1;
+        Particle.publish("doublecheck", String(SignalT), PRIVATE);
     }
-    if (flag == 2)
-        Particle.publish("Signal", String(SignalT), PRIVATE);
+    else
+    {
+        int SignalB = DA + DB*10 + DC*100 + DD*1000 + DE*10000 + DS*100000;
+        Particle.publish("Signal", String(SignalB), PRIVATE);
+    }
 }
 
 void GetRes(const char *event, const char *data) {
     int message = atoi(data);
     int num = message % 10;
     int STATE = message / 10;
-    resensor[num] = STATE;
+    if (num == 8)
+        DistS = message / 100;
+    else
+        resensor[num] = STATE;
 }
 
 void setup() 
